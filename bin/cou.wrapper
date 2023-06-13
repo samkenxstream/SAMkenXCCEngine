@@ -3,4 +3,4 @@
 [ -z "$JUJU_DATA" ] && JUJU_DATA="/home/$USER/.local/share/juju"
 export JUJU_DATA=$JUJU_DATA
 
-exec "$SNAP/bin/cou" "$@"
+exec "$SNAP/bin/xcc" "$@"
