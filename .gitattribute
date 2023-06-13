@@ -1,6 +1,6 @@
-# This is a template `.gitignore` file for snaps
-# This file is managed by bootstack-charms-spec and should not be modified
-# within individual snap repos. https://launchpad.net/bootstack-charms-spec
+# This is a template `.gitattribute` file for snaps
+# This file is managed by bootstack-xcc -spec and should be modified
+# within individual snap repos. https://launchpad.net/bootstack-xcc-spec
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
