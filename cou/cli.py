@@ -13,17 +13,35 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Entrypoint to the 'charmed openstack upgrader'."""
+"""Entrypoint to the 'charmed-openstack-upgrader'."""
 import argparse
 import logging
+import logging.handlers
+import os
+import pathlib
 import sys
+from datetime import datetime
 from typing import Any
 
-from cou.steps.plan import apply_plan, dump_plan, generate_plan
+from colorama import Fore, Style
+
+from cou.steps import UpgradeStep
+from cou.steps.analyze import Analysis
+from cou.steps.plan import generate_plan
+from cou.utils import juju_utils as utils
+
+COU_DIR_LOG = pathlib.Path(os.getenv("HOME", ""), ".local/share/cou/log")
+AVAILABLE_OPTIONS = "cas"
 
 
 def parse_args(args: Any) -> argparse.Namespace:
-    """Parse cli arguments."""
+    """Parse cli arguments.
+
+    :param args: Arguments to be parsed.
+    :type args: Any
+    :return: Arguments parsed to the cli execution.
+    :rtype: argparse.Namespace
+    """
     parser = argparse.ArgumentParser(
         description="description",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -43,8 +61,12 @@ def parse_args(args: Any) -> argparse.Namespace:
         help="Set the logging level",
     )
     parser.add_argument(
-        "--interactive", default=True, help="Sets the interactive prompts", action="store_true"
+        "--model",
+        default=None,
+        dest="model_name",
+        help="Set the model to operate on.",
     )
+    parser.add_argument("--interactive", default=True, help="Sets the interactive prompts")
 
     return parser.parse_args(args)
 
@@ -59,26 +81,92 @@ def setup_logging(log_level: str = "INFO") -> None:
         fmt="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    if not root_logger.hasHandlers():
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(log_formatter)
-        root_logger.addHandler(console_handler)
+    root_logger.setLevel("DEBUG")
+
+    # handler for the log file. Log level is DEBUG
+    time_stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    file_name = f"{COU_DIR_LOG}/cou-{time_stamp}.log"
+    pathlib.Path(COU_DIR_LOG).mkdir(parents=True, exist_ok=True)
+    log_file_handler = logging.FileHandler(file_name)
+    log_file_handler.setFormatter(log_formatter)
+
+    # handler for the console. Log level comes from the CLI
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(log_formatter)
+
+    root_logger.addHandler(log_file_handler)
+    root_logger.addHandler(console_handler)
+    logging.info("Logs of this execution can be found at %s", file_name)
 
 
-def entrypoint() -> int:
+def prompt(parameter: str) -> str:
+    """Generate eye-catching prompt.
+
+    :param parameter: String to show at the prompt with the user options.
+    :type parameter: str
+    :return: Colored prompt string with the user options.
+    :rtype: str
+    """
+
+    def bold(text: str) -> str:
+        return Style.RESET_ALL + Fore.RED + Style.BRIGHT + text + Style.RESET_ALL
+
+    def normal(text: str) -> str:
+        return Style.RESET_ALL + Fore.RED + text + Style.RESET_ALL
+
+    return (
+        normal(parameter + " (")
+        + bold("c")
+        + normal(")ontinue/(")
+        + bold("a")
+        + normal(")bort/(")
+        + bold("s")
+        + normal(")kip:")
+    )
+
+
+async def apply_plan(upgrade_plan: UpgradeStep) -> None:
+    """Apply the plan for upgrade.
+
+    :param upgrade_plan: Plan to be executed on steps.
+    :type upgrade_plan: UpgradeStep
+    """
+    result = "X"
+    while result.casefold() not in AVAILABLE_OPTIONS:
+        result = input(prompt(upgrade_plan.description)).casefold()
+        match result:
+            case "c":
+                await upgrade_plan.run()
+                for sub_step in upgrade_plan.sub_steps:
+                    await apply_plan(sub_step)
+            case "a":
+                logging.info("Aborting plan")
+                sys.exit(1)
+            case "s":
+                logging.info("Skipped")
+            case _:
+                logging.info("No valid input provided!")
+
+
+async def entrypoint() -> None:
     """Execute 'charmed-openstack-upgrade' command."""
     try:
         args = parse_args(sys.argv[1:])
+
+        model_name = await utils.async_set_current_model_name(args.model_name)
+        logging.info("Setting current model name: %s", model_name)
+
         setup_logging(log_level=args.loglevel)
 
-        upgrade_plan = generate_plan(args)
+        analysis_result = await Analysis.create()
+        print(analysis_result)
+        upgrade_plan = await generate_plan(analysis_result)
         if args.dry_run:
-            dump_plan(upgrade_plan)
+            print(upgrade_plan)
         else:
-            apply_plan(upgrade_plan)
+            await apply_plan(upgrade_plan)
 
-        return 0
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logging.error(exc)
-        return 1
+        logging.exception(exc)
+        sys.exit(1)
